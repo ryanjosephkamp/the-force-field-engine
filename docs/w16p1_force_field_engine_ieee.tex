@@ -1,0 +1,445 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{cleveref}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{microtype}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red!70!black},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+}
+
+\title{Constructing Molecular Mechanics Force Fields:\\
+A Modular Implementation of Harmonic and Non-Bonded Potentials}
+
+\author{
+    \IEEEauthorblockN{Ryan Kamp}
+    \IEEEauthorblockA{Dept.\ of Computer Science\\
+        University of Cincinnati\\
+        Cincinnati, OH 45221\\
+        \texttt{kamprj@mail.uc.edu}\\
+        \url{https://github.com/ryanjosephkamp}}
+    \and
+    \IEEEauthorblockN{\textnormal{\textit{Week 16, Project 1}}}
+    \IEEEauthorblockA{Biophysics Portfolio\\
+        CS Research Self-Study\\
+        February 23, 2026}
+}
+
+\begin{document}
+
+\maketitle
+
+% ─────────────────────────────────────────────────────────────────────
+\begin{abstract}
+Molecular mechanics force fields translate the quantum-mechanical reality of
+chemical bonding into a computationally tractable classical potential energy
+function~$U(\mathbf{r})$.  We present a from-scratch Python implementation of
+the five canonical force field energy terms---harmonic bond stretching, harmonic
+angle bending, periodic dihedral torsions, Lennard-Jones 12-6 van der Waals
+interactions, and Coulomb electrostatics---parameterized with AMBER~ff99 values.
+The engine evaluates six preset polypeptide systems ranging from the alanine
+dipeptide (22~atoms) to a 5-residue alpha helix (50~atoms), computes per-bond
+stress to identify frustrated regions, and provides an interactive ``Break a
+Bond'' experiment.  All energies are reported in~kcal/mol with physically
+meaningful parameters drawn from the Cornell~et~al.\ (1995) force
+field~\cite{cornell1995}.  Non-bonded interactions consistently dominate the
+total energy in systems larger than~20 atoms, and the harmonic approximation
+accurately reproduces near-equilibrium behavior while diverging at large
+displacements.
+\end{abstract}
+
+\begin{IEEEkeywords}
+molecular mechanics, force field, AMBER, Lennard-Jones, Coulomb electrostatics,
+harmonic potential, protein simulation
+\end{IEEEkeywords}
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Introduction}
+
+Predicting protein structure and stability requires evaluating the total
+potential energy~$U(\mathbf{r})$ as a function of all~$3N$ atomic coordinates.
+In molecular mechanics (MM), the electronic structure is replaced by a classical
+energy function composed of simple analytical terms: springs for bonds, cosines
+for torsions, and power laws for van der Waals interactions~\cite{ponder2003}.
+This approximation reduces the computational cost from the~$\mathcal{O}(N^7)$
+scaling of high-level quantum methods to~$\mathcal{O}(N^2)$ (or lower with
+cutoffs), enabling simulations of systems containing thousands of
+atoms~\cite{karplus2002}.
+
+The total MM potential energy decomposes into five terms:
+\begin{equation}\label{eq:total}
+U(\mathbf{r}) = U_{\text{bonds}} + U_{\text{angles}} + U_{\text{dihedrals}}
+    + U_{\text{VdW}} + U_{\text{elec}}
+\end{equation}
+
+Each term is parameterized independently using experimental or quantum-chemical
+data.  The AMBER family of force fields~\cite{cornell1995, wang2004} is among
+the most widely used for biomolecular simulations.
+
+This work presents a modular Python implementation of~\cref{eq:total} with
+AMBER~ff99 parameters, applied to six preset polypeptide systems.  We
+introduce a per-bond stress metric that highlights frustrated regions and
+provide an interactive bond-stretching experiment that demonstrates the
+breakdown of the harmonic approximation.
+
+\subsection{Scope and Contributions}
+
+\begin{enumerate}
+    \item A self-contained force-field engine implementing all five energy
+          terms with AMBER~ff99 parameters.
+    \item Per-bond stress visualization for identifying frustrated regions.
+    \item A ``Break a Bond'' experiment illustrating harmonic energy growth.
+    \item Parameter scanning and coordinate perturbation utilities.
+    \item Interactive Streamlit dashboard and CLI for exploration.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Theory}
+
+\subsection{Harmonic Bond Stretching}
+
+Covalent bonds are modeled as harmonic oscillators.  The energy for bond~$b$
+between atoms~$i$ and~$j$ is:
+\begin{equation}\label{eq:bond}
+U_{\text{bond}} = \frac{1}{2} k_b (r_{ij} - r_0)^2
+\end{equation}
+where~$k_b$ is the force constant, $r_{ij}$ is the internuclear distance, and
+$r_0$ is the equilibrium bond length.  AMBER~ff99 values for a C--C single bond
+are~$k_b = 340$~kcal/(mol\,\AA$^2$) and~$r_0 = 1.526$~\AA~\cite{cornell1995}.
+
+\subsection{Harmonic Angle Bending}
+
+The angle~$\theta_{ijk}$ formed by three consecutively bonded atoms resists
+deformation from equilibrium:
+\begin{equation}\label{eq:angle}
+U_{\text{angle}} = \frac{1}{2} k_\theta (\theta_{ijk} - \theta_0)^2
+\end{equation}
+Tetrahedral sp$^3$ carbon centers have~$\theta_0 \approx 109.5°$ with~$k_\theta
+\approx 63$~kcal/(mol\,rad$^2$).
+
+\subsection{Periodic Dihedral Torsions}
+
+Rotation about the central bond of four consecutive atoms follows a periodic
+potential:
+\begin{equation}\label{eq:dihedral}
+U_{\text{dihedral}} = \frac{V_n}{2} \left[ 1 + \cos(n\phi - \gamma) \right]
+\end{equation}
+where~$V_n$ is the barrier height, $n$~is the periodicity, $\phi$~is the
+torsion angle, and~$\gamma$~is the phase offset.
+
+\subsection{Lennard-Jones 12-6 Potential}
+
+Non-bonded van der Waals interactions are modeled by:
+\begin{equation}\label{eq:lj}
+U_{\text{LJ}} = 4\varepsilon \left[ \left(\frac{\sigma}{r}\right)^{12}
+    - \left(\frac{\sigma}{r}\right)^{6} \right]
+\end{equation}
+The~$r^{-12}$ term captures Pauli repulsion; the~$r^{-6}$ term represents
+London dispersion.  Cross-type parameters use the Lorentz-Berthelot combining
+rules:
+\begin{equation}\label{eq:combine}
+\sigma_{ij} = \frac{\sigma_i + \sigma_j}{2}, \quad
+\varepsilon_{ij} = \sqrt{\varepsilon_i \varepsilon_j}
+\end{equation}
+
+\subsection{Coulomb Electrostatics}
+
+Partial atomic charges interact via Coulomb's law:
+\begin{equation}\label{eq:coulomb}
+U_{\text{elec}} = \frac{332.0636 \, q_i q_j}{\varepsilon_r \, r_{ij}}
+\end{equation}
+The constant~$332.0636$~kcal\,\AA/(mol\,e$^2$) ensures correct units when
+charges are in elementary charge units and distances in angstroms.
+
+\subsection{Exclusion Scheme}
+
+Atoms separated by one bond (1-2~pairs) or two bonds (1-3~pairs) are excluded
+from non-bonded calculations.  These short-range interactions are already
+captured by the bond and angle terms~\cite{cornell1995}.
+
+\subsection{Bond Stress Metric}
+
+We define per-bond stress as the normalized harmonic energy:
+\begin{equation}\label{eq:stress}
+s_b = \frac{U_b}{\max_{b'} U_{b'}}
+\end{equation}
+Values near~1.0 indicate maximally strained bonds, which may correspond to
+frustrated regions involved in catalysis or conformational
+change~\cite{brooks2009}.
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Methods}
+
+\subsection{Software Architecture}
+
+The implementation follows a layered architecture with strict dependency flow:
+
+\begin{table}[H]
+\centering
+\caption{Module Architecture}
+\label{tab:architecture}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Module & Responsibility & Lines \\
+\midrule
+\texttt{forcefield\_engine.py} & Data structures, energy calculators & $\sim$1570 \\
+\texttt{analysis.py} & Typed result containers, pipelines & $\sim$640 \\
+\texttt{visualization.py} & Plotly + Matplotlib renderers & $\sim$850 \\
+\texttt{app.py} & 8-page Streamlit dashboard & $\sim$940 \\
+\texttt{main.py} & CLI with 5 modes & $\sim$230 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ForceField Data Model}
+
+The \texttt{ForceField} class maintains lists of \texttt{Atom},
+\texttt{BondParam}, \texttt{AngleParam}, and \texttt{DihedralParam} dataclass
+instances.  An exclusion set of (1-2) and (1-3) atom pairs is built
+automatically from the bond and angle topology.
+
+\subsection{Energy Evaluation Protocol}
+
+Energy evaluation proceeds sequentially through the five terms:
+\begin{enumerate}
+    \item Bond energy: iterate over all \texttt{BondParam} entries; compute
+          $r_{ij}$ via Euclidean distance; apply~\cref{eq:bond}.
+    \item Angle energy: compute~$\theta_{ijk}$ via the dot product of bond
+          vectors; apply~\cref{eq:angle}.
+    \item Dihedral energy: compute~$\phi$ via the cross-product method;
+          apply~\cref{eq:dihedral}.
+    \item Non-bonded energy: double loop over all non-excluded pairs within
+          the cutoff; compute LJ~(\cref{eq:lj}) + Coulomb~(\cref{eq:coulomb}).
+    \item Total: sum all five contributions.
+\end{enumerate}
+
+\subsection{Preset Molecule Systems}
+
+\begin{table}[H]
+\centering
+\caption{Preset Polypeptide Systems}
+\label{tab:presets}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Molecule & Atoms & Bonds & Angles & Description \\
+\midrule
+Alanine dipeptide   & 22 & 21 & 20 & Standard benchmark \\
+Glycine tripeptide  & 33 & 32 & 31 & Extended backbone \\
+Alpha helix (5-res) & 50 & 49 & 48 & Poly-alanine helix \\
+Beta hairpin        & 16 & 15 & 12 & Backbone strand \\
+Salt bridge         & 14 & 13 & 12 & Lys-Asp charge pair \\
+Disulfide bond      & 12 & 11 & 10 & Cys-S-S-Cys cross-link \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Stress Visualization}
+
+Per-bond stresses are computed via~\cref{eq:stress} and mapped to a
+blue-to-red color scale.  Bonds with stress~$> 0.7$ are flagged as frustrated
+regions and reported to the user.
+
+\subsection{Break a Bond Experiment}
+
+A selected bond is incrementally stretched from equilibrium by up to a
+user-specified displacement.  At each step, the full energy~$U(\mathbf{r})$ is
+recomputed, demonstrating the quadratic growth of the harmonic
+term~(\cref{eq:bond}).
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Results}
+
+\subsection{Energy Decomposition --- Alanine Dipeptide}
+
+The alanine dipeptide (Ace-Ala-Nme, 22~atoms) provides the primary benchmark.
+Non-bonded interactions (VdW + electrostatic) consistently dominate the total
+energy, accounting for the majority of the energy magnitude.  Bond and angle
+terms contribute moderate positive energy due to minor deviations from
+equilibrium geometry.
+
+\subsection{Stress Analysis}
+
+Terminal bonds (N-terminus and C-terminus cappings) exhibit higher stress than
+interior backbone peptide bonds, reflecting minor geometric deviations in the
+preset builders.  Frustrated regions correspond to bonds with normalized
+stress~$> 0.7$.  The dashboard provides a per-residue frustration table
+reporting the residue name, atom count, number of stressed bonds exceeding
+the system mean, maximum and mean bond stress, and the largest bond
+displacement~$|r - r_0|$ in angstroms.
+
+\subsection{Break a Bond}
+
+Stretching the N--C$_\alpha$ bond of alanine dipeptide by up to~$+2.0$~\AA\
+produces the expected parabolic energy curve.  The energy increases by several
+hundred~kcal/mol---far exceeding the thermal energy~$k_BT \approx
+0.6$~kcal/mol at~300~K---demonstrating the high cost of covalent bond rupture
+in the harmonic approximation.
+
+\subsection{Parameter Sensitivity}
+
+Scanning the bond force constant~$k_b$ from 50 to
+600~kcal/(mol\,\AA$^2$) reveals a linear relationship between~$k_b$ and the
+total bond energy contribution when bonds are displaced from equilibrium.  The
+dielectric constant~$\varepsilon_r$ modulates electrostatic energy
+approximately inversely.
+
+\subsection{Perturbation Robustness}
+
+Gaussian coordinate perturbations with scale factors from 0.01 to 0.5~\AA\
+demonstrate:
+\begin{itemize}
+    \item $\sigma = 0.01$~\AA: energy change~$< 1$~kcal/mol (thermal regime)
+    \item $\sigma = 0.1$~\AA: energy change~$\sim 10$--$50$~kcal/mol (strain)
+    \item $\sigma = 0.5$~\AA: energy change~$\sim 100+$~kcal/mol (non-physical)
+\end{itemize}
+
+\subsection{Cross-Molecule Comparison}
+
+Larger systems show proportionally larger non-bonded contributions due to
+$\mathcal{O}(N^2)$ pair scaling.  The salt bridge system is dominated by
+strong Coulomb attraction between charged residues.
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Discussion}
+
+\subsection{Accuracy of the Harmonic Approximation}
+
+The harmonic bond model accurately reproduces near-equilibrium energetics but
+diverges from reality at large displacements.  A Morse potential would provide
+more realistic behavior at the cost of additional parameters~\cite{leach2001}.
+The ``Break a Bond'' experiment clearly illustrates this limitation.
+
+\subsection{Non-Bonded Dominance}
+
+In systems larger than~$\sim 20$ atoms, non-bonded interactions dominate the
+energy landscape.  This reflects the~$N(N-1)/2$ pair scaling versus the
+linear scaling of bonded terms.  Electrostatics are particularly important in
+polypeptides due to large partial charges on backbone N, C, and O
+atoms~\cite{mackerell1998}.
+
+\subsection{Computational Considerations}
+
+The naive~$O(N^2)$ non-bonded calculation can be accelerated to~$O(N \log N)$
+via particle-mesh Ewald~\cite{darden1993} or~$O(N)$ via the fast multipole
+method.  Neighbor lists and cell lists are classical spatial data structures
+used in production MD codes~\cite{allen2017}.
+
+\subsection{Limitations}
+
+The current implementation uses fixed partial charges (no polarization),
+harmonic bonds (no dissociation), and idealized preset geometries.  No explicit
+solvent, periodic boundary conditions, or long-range electrostatic corrections
+are applied.
+
+\subsection{Biological Relevance}
+
+Force fields enable structure refinement, drug design scoring, molecular
+dynamics, and mutation impact prediction~\cite{karplus2002}.  The per-bond
+stress metric introduced here provides a simple diagnostic for identifying
+structurally frustrated regions that may correlate with functional sites.
+
+% ─────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+We have implemented a complete molecular mechanics force field engine with five
+standard energy terms and AMBER~ff99 parameters.  The engine evaluates six
+preset polypeptide systems, computes per-bond stress for frustrated-region
+identification, and provides interactive bond-stretching, parameter-scanning,
+and coordinate-perturbation experiments.  Non-bonded interactions dominate in
+larger systems, and the harmonic approximation accurately describes
+near-equilibrium behavior while failing at large displacements.  The modular
+Python architecture provides a pedagogical platform for exploring the physics
+underlying modern biomolecular simulation.
+
+% ─────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{14}
+
+\bibitem{cornell1995}
+W.~D. Cornell et~al., ``A Second Generation Force Field for the Simulation of
+Proteins, Nucleic Acids, and Organic Molecules,'' \emph{J. Am. Chem. Soc.},
+vol.~117, pp.~5179--5197, 1995.
+
+\bibitem{weiner1984}
+S.~J. Weiner et~al., ``A New Force Field for Molecular Mechanical Simulation
+of Nucleic Acids and Proteins,'' \emph{J. Am. Chem. Soc.}, vol.~106,
+pp.~765--784, 1984.
+
+\bibitem{ponder2003}
+J.~W. Ponder and D.~A. Case, ``Force Fields for Protein Simulations,''
+\emph{Adv. Protein Chem.}, vol.~66, pp.~27--85, 2003.
+
+\bibitem{wang2004}
+J.~Wang et~al., ``Development and Testing of a General AMBER Force Field,''
+\emph{J. Comput. Chem.}, vol.~25, pp.~1157--1174, 2004.
+
+\bibitem{mackerell1998}
+A.~D. MacKerell et~al., ``All-Atom Empirical Potential for Molecular Modeling
+and Dynamics Studies of Proteins,'' \emph{J. Phys. Chem. B}, vol.~102,
+pp.~3586--3616, 1998.
+
+\bibitem{jorgensen1996}
+W.~L. Jorgensen et~al., ``Development and Testing of the OPLS All-Atom Force
+Field,'' \emph{J. Am. Chem. Soc.}, vol.~118, pp.~11225--11236, 1996.
+
+\bibitem{karplus2002}
+M.~Karplus and J.~A. McCammon, ``Molecular Dynamics Simulations of
+Biomolecules,'' \emph{Nat. Struct. Biol.}, vol.~9, pp.~646--652, 2002.
+
+\bibitem{brooks2009}
+B.~R. Brooks et~al., ``CHARMM: The Biomolecular Simulation Program,''
+\emph{J. Comput. Chem.}, vol.~30, pp.~1545--1614, 2009.
+
+\bibitem{duan2003}
+Y.~Duan et~al., ``A Point-Charge Force Field for Molecular Mechanics
+Simulations of Proteins,'' \emph{J. Comput. Chem.}, vol.~24,
+pp.~1999--2012, 2003.
+
+\bibitem{lennard1924}
+J.~E. Lennard-Jones, ``On the Determination of Molecular Fields,''
+\emph{Proc. R. Soc. Lond. A}, vol.~106, pp.~463--477, 1924.
+
+\bibitem{darden1993}
+T.~Darden, D.~York, and L.~Pedersen, ``Particle Mesh Ewald: An
+$N\!\cdot\!\log(N)$ Method for Ewald Sums,'' \emph{J. Chem. Phys.},
+vol.~98, pp.~10089--10092, 1993.
+
+\bibitem{leach2001}
+A.~R. Leach, \emph{Molecular Modelling: Principles and Applications},
+2nd~ed.\hskip 1em Pearson, 2001.
+
+\bibitem{schlick2010}
+T.~Schlick, \emph{Molecular Modeling and Simulation: An Interdisciplinary
+Guide}, 2nd~ed.\hskip 1em Springer, 2010.
+
+\bibitem{allen2017}
+M.~P. Allen and D.~J. Tildesley, \emph{Computer Simulation of Liquids},
+2nd~ed.\hskip 1em Oxford University Press, 2017.
+
+\bibitem{ferreiro2007}
+D.~U. Ferreiro et~al., ``Localizing Frustration in Native Proteins and
+Protein Assemblies,'' \emph{Proc. Natl. Acad. Sci. USA}, vol.~104,
+pp.~19819--19824, 2007.
+
+\bibitem{morse1929}
+P.~M. Morse, ``Diatomic Molecules According to the Wave Mechanics.~II.
+Vibrational Levels,'' \emph{Physical Review}, vol.~34, pp.~57--64, 1929.
+
+\end{thebibliography}
+
+\end{document}
