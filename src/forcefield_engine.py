@@ -1152,125 +1152,271 @@ def build_glycine_tripeptide() -> ForceField:
 def build_alpha_helix_5() -> ForceField:
     """Build a five-residue poly-alanine α-helix.
 
-    Uses ideal helical parameters: φ = −57°, ψ = −47°, rise = 1.5 Å,
-    3.6 residues per turn.
+    Uses explicit Cartesian coordinates derived from ideal helical
+    backbone geometry (φ = −57°, ψ = −47°, ω = 180°) with proper
+    bond lengths and tetrahedral hydrogen placement.  All inter-atomic
+    distances respect van der Waals radii to avoid steric clashes.
 
     Returns
     -------
     ForceField
-        Parameterized α-helix fragment.
+        Parameterized α-helix fragment (50 atoms).
     """
     ff = ForceField(name="α-Helix (5-residue poly-Ala)")
 
-    phi_rad = math.radians(-57.0)
-    psi_rad = math.radians(-47.0)
-    rise = 1.5  # Å per residue along helix axis
-    radius = 2.3  # Å backbone radius
+    # ── Helper: place atom at distance *d* from *origin* along *direction* ──
+    def _place(origin: np.ndarray, direction: np.ndarray, d: float) -> np.ndarray:
+        n = np.linalg.norm(direction)
+        if n < 1e-12:
+            return origin + np.array([d, 0.0, 0.0])
+        return origin + direction / n * d
 
+    def _perp(v: np.ndarray) -> np.ndarray:
+        """Return a unit vector perpendicular to *v*."""
+        if abs(v[0]) < 0.9:
+            candidate = np.array([1.0, 0.0, 0.0])
+        else:
+            candidate = np.array([0.0, 1.0, 0.0])
+        p = np.cross(v, candidate)
+        return p / np.linalg.norm(p)
+
+    # ── Build backbone via torsion propagation ──
+    # Ideal helix: φ = −57°, ψ = −47°, ω = 180°
+    # Bond lengths: N-CA 1.449, CA-C 1.522, C-N 1.335
+    # Bond angle at each backbone junction ≈ 111° (1.937 rad)
+
+    phi = math.radians(-57.0)
+    psi = math.radians(-47.0)
+    omega = math.pi  # trans peptide bond
+
+    bl_n_ca = 1.449
+    bl_ca_c = 1.522
+    bl_c_n = 1.335
+
+    # Backbone bond angles (vary by vertex atom type)
+    ba_at_ca = math.radians(111.2)   # N-CA-C angle
+    ba_at_c = math.radians(116.2)    # CA-C-N angle
+    ba_at_n = math.radians(121.7)    # C-N-CA angle
+
+    def _next_atom(a: np.ndarray, b: np.ndarray, c: np.ndarray,
+                   bond_len: float, bond_angle: float, torsion: float) -> np.ndarray:
+        """Place atom D given A-B-C chain, B-C-D angle, and A-B-C-D torsion."""
+        bc = c - b
+        bc_n = bc / np.linalg.norm(bc)
+        ab = b - a
+        n_vec = np.cross(ab, bc)
+        n_norm = np.linalg.norm(n_vec)
+        if n_norm < 1e-12:
+            n_vec = _perp(bc_n)
+        else:
+            n_vec = n_vec / n_norm
+        m = np.cross(n_vec, bc_n)
+        # NeRF local-frame coordinates (note: NO leading minus on dx)
+        dx = bond_len * math.cos(math.pi - bond_angle)
+        dy = bond_len * math.sin(math.pi - bond_angle) * math.cos(torsion)
+        dz = bond_len * math.sin(math.pi - bond_angle) * math.sin(torsion)
+        return c + dx * bc_n + dy * m + dz * n_vec
+
+    # Seed first three backbone atoms along +x
+    backbone: List[np.ndarray] = []
+    backbone.append(np.array([0.0, 0.0, 0.0]))         # N1
+    backbone.append(np.array([bl_n_ca, 0.0, 0.0]))     # CA1
+    backbone.append(_next_atom(
+        np.array([-bl_c_n, 0.0, 0.1]),  # virtual predecessor
+        backbone[0], backbone[1],
+        bl_ca_c, ba_at_ca, math.radians(120.0),
+    ))  # C1 — initial torsion is arbitrary
+
+    # Propagation sequences (after C1 is placed):
+    #   step 0: place N2  from [N1, CA1, C1]  using ψ, bond C-N, angle at C
+    #   step 1: place CA2 from [CA1, C1, N2]  using ω, bond N-CA, angle at N
+    #   step 2: place C2  from [C1, N2, CA2]  using φ, bond CA-C, angle at CA
+    torsion_seq = [psi, omega, phi]
+    bond_seq = [bl_c_n, bl_n_ca, bl_ca_c]
+    angle_seq = [ba_at_c, ba_at_n, ba_at_ca]
+    # We need 5 residues × 3 backbone atoms = 15; we have 3, need 12 more
+    for step in range(12):
+        a, b, c = backbone[-3], backbone[-2], backbone[-1]
+        tor = torsion_seq[step % 3]
+        bl = bond_seq[step % 3]
+        ba = angle_seq[step % 3]
+        backbone.append(_next_atom(a, b, c, bl, ba, tor))
+
+    # backbone indices:  0,1,2 = N1,CA1,C1;  3,4,5 = N2,CA2,C2; ...
+    # Atom layout per residue (10 atoms each): N H CA HA CB HB1 HB2 HB3 C O
+    atoms_data: List[tuple] = []
+    bond_defs: List[tuple] = []
+    angle_defs: List[tuple] = []
+    dihedral_defs: List[tuple] = []
     atom_idx = 0
-    bond_start_prev_c = -1
+
+    prev_c_idx = -1
 
     for res in range(5):
-        angle_offset = res * (2.0 * math.pi / 3.6)
-        z_base = res * rise
+        base = res * 3  # index into backbone[]
+        n_pos = backbone[base]
+        ca_pos = backbone[base + 1]
+        c_pos = backbone[base + 2]
+        rid = res + 1
 
-        # N
-        nx = radius * math.cos(angle_offset)
-        ny = radius * math.sin(angle_offset)
-        nz = z_base
-        ff.add_atom(Atom(index=atom_idx, name="N", element="N", atom_type="N",
-                         residue="ALA", residue_id=res + 1,
-                         x=nx, y=ny, z=nz, charge=-0.4157, mass=14.007))
+        # ── N ──
         n_idx = atom_idx
+        atoms_data.append((atom_idx, "N", "N", "N", "ALA", rid,
+                           n_pos[0], n_pos[1], n_pos[2], -0.4157, 14.007))
         atom_idx += 1
 
-        # H on N
-        ff.add_atom(Atom(index=atom_idx, name="H", element="H", atom_type="HN",
-                         residue="ALA", residue_id=res + 1,
-                         x=nx + 0.5, y=ny + 0.5, z=nz, charge=0.2719, mass=1.008))
+        # ── H on N (opposite to CA direction, in plane, 1.01 Å) ──
         h_idx = atom_idx
+        h_dir = n_pos - ca_pos
+        if prev_c_idx >= 0:
+            prev_c_pos = np.array([atoms_data[prev_c_idx][6],
+                                   atoms_data[prev_c_idx][7],
+                                   atoms_data[prev_c_idx][8]])
+            h_dir = n_pos - (prev_c_pos + ca_pos) / 2.0
+        h_pos = _place(n_pos, h_dir, 1.01)
+        atoms_data.append((atom_idx, "H", "H", "HN", "ALA", rid,
+                           h_pos[0], h_pos[1], h_pos[2], 0.2719, 1.008))
         atom_idx += 1
 
-        # CA
-        ca_offset = angle_offset + 0.3
-        cax = radius * math.cos(ca_offset) + 0.2
-        cay = radius * math.sin(ca_offset) + 0.2
-        caz = z_base + 0.4
-        ff.add_atom(Atom(index=atom_idx, name="CA", element="C", atom_type="CT",
-                         residue="ALA", residue_id=res + 1,
-                         x=cax, y=cay, z=caz, charge=0.0337, mass=12.011))
+        # ── CA ──
         ca_idx = atom_idx
+        atoms_data.append((atom_idx, "CA", "C", "CT", "ALA", rid,
+                           ca_pos[0], ca_pos[1], ca_pos[2], 0.0337, 12.011))
         atom_idx += 1
 
-        # HA
-        ff.add_atom(Atom(index=atom_idx, name="HA", element="H", atom_type="HA",
-                         residue="ALA", residue_id=res + 1,
-                         x=cax + 0.6, y=cay - 0.6, z=caz, charge=0.0823, mass=1.008))
+        # ── Tetrahedral placement of HA and CB around CA ──
+        # CA has four sp3 substituents: N, C, HA, CB
+        d1 = (n_pos - ca_pos)
+        d1 = d1 / np.linalg.norm(d1)
+        d2 = (c_pos - ca_pos)
+        d2 = d2 / np.linalg.norm(d2)
+        d_mid = -(d1 + d2)
+        d_mid_norm = np.linalg.norm(d_mid)
+        if d_mid_norm < 1e-12:
+            d_mid = _perp(d1)
+        else:
+            d_mid = d_mid / d_mid_norm
+        d_perp = np.cross(d1, d2)
+        d_perp_norm = np.linalg.norm(d_perp)
+        if d_perp_norm < 1e-12:
+            d_perp = _perp(d_mid)
+        else:
+            d_perp = d_perp / d_perp_norm
+        # Tetrahedral split angle from midpoint axis
+        half_ncc = math.acos(max(-1.0, min(1.0, float(np.dot(d1, d2))))) / 2.0
+        cos_half = math.cos(half_ncc)
+        cos_alpha = (1.0 / 3.0) / max(cos_half, 0.01)
+        cos_alpha = min(cos_alpha, 0.999)
+        sin_alpha = math.sqrt(max(0.0, 1.0 - cos_alpha ** 2))
+        ha_direction = cos_alpha * d_mid + sin_alpha * d_perp
+        cb_direction = cos_alpha * d_mid - sin_alpha * d_perp
+
+        # ── HA ──
         ha_idx = atom_idx
+        ha_pos = ca_pos + 1.09 * ha_direction
+        atoms_data.append((atom_idx, "HA", "H", "HA", "ALA", rid,
+                           ha_pos[0], ha_pos[1], ha_pos[2], 0.0823, 1.008))
         atom_idx += 1
 
-        # CB
-        ff.add_atom(Atom(index=atom_idx, name="CB", element="C", atom_type="CT",
-                         residue="ALA", residue_id=res + 1,
-                         x=cax - 1.0, y=cay + 0.8, z=caz + 0.5, charge=-0.1825, mass=12.011))
+        # ── CB ──
         cb_idx = atom_idx
+        cb_pos = ca_pos + 1.526 * cb_direction
+        atoms_data.append((atom_idx, "CB", "C", "CT", "ALA", rid,
+                           cb_pos[0], cb_pos[1], cb_pos[2], -0.1825, 12.011))
         atom_idx += 1
 
-        # HB1, HB2, HB3
-        for hb_name, dx, dy, dz in [("HB1", -0.5, 0.3, 1.0), ("HB2", -1.5, 0.3, 0.5), ("HB3", -0.5, 1.3, 0.5)]:
-            ff.add_atom(Atom(index=atom_idx, name=hb_name, element="H", atom_type="HC",
-                             residue="ALA", residue_id=res + 1,
-                             x=cax + dx, y=cay + dy, z=caz + dz, charge=0.0603, mass=1.008))
-            hb_idx = atom_idx
-            ff.add_bond(BondParam(atom_i=cb_idx, atom_j=hb_idx, k=340.0, r0=1.09))
+        # ── HB1, HB2, HB3 (methyl H, 1.09 Å from CB, tetrahedral) ──
+        cb_ca_dir = ca_pos - cb_pos
+        cb_ca_n = cb_ca_dir / np.linalg.norm(cb_ca_dir)
+        p1 = _perp(cb_ca_n)
+        p2 = np.cross(cb_ca_n, p1)
+        tet_angle = math.radians(109.5)
+        # Stagger methyl H by 60° relative to the HA-CA-CB plane
+        stagger = math.pi / 3.0
+        hb_indices = []
+        for k in range(3):
+            rot = stagger + k * (2.0 * math.pi / 3.0)
+            hx = -math.cos(tet_angle)
+            hy = math.sin(tet_angle) * math.cos(rot)
+            hz = math.sin(tet_angle) * math.sin(rot)
+            hb_dir = hx * cb_ca_n + hy * p1 + hz * p2
+            hb_pos = cb_pos + 1.09 * hb_dir
+            hb_name = f"HB{k + 1}"
+            atoms_data.append((atom_idx, hb_name, "H", "HC", "ALA", rid,
+                               hb_pos[0], hb_pos[1], hb_pos[2], 0.0603, 1.008))
+            hb_indices.append(atom_idx)
+            bond_defs.append((cb_idx, atom_idx, 340.0, 1.09))
             atom_idx += 1
 
-        # C
-        c_offset = angle_offset + 0.6
-        cx = radius * math.cos(c_offset) + 0.4
-        cy = radius * math.sin(c_offset) + 0.4
-        cz = z_base + 0.9
-        ff.add_atom(Atom(index=atom_idx, name="C", element="C", atom_type="C",
-                         residue="ALA", residue_id=res + 1,
-                         x=cx, y=cy, z=cz, charge=0.5973, mass=12.011))
-        c_idx = atom_idx
+        # ── C ──
+        c_idx_cur = atom_idx
+        atoms_data.append((atom_idx, "C", "C", "C", "ALA", rid,
+                           c_pos[0], c_pos[1], c_pos[2], 0.5973, 12.011))
         atom_idx += 1
 
-        # O
-        ff.add_atom(Atom(index=atom_idx, name="O", element="O", atom_type="O",
-                         residue="ALA", residue_id=res + 1,
-                         x=cx + 0.8, y=cy + 0.8, z=cz, charge=-0.5679, mass=15.999))
+        # ── O (carbonyl, 1.229 Å from C, sp2 in peptide plane) ──
+        # Place O using NeRF: it's in the peptide plane approximately
+        # opposite N(i+1). The torsion N-CA-C-O ≈ ψ + 180° with a
+        # correction for sp2 asymmetry (CA-C-O ≈ 120.5°, CA-C-N ≈ 116.2°).
         o_idx = atom_idx
+        torsion_o = psi - math.radians(123.3)  # opposite N(i+1) in sp2 plane
+        o_pos = _next_atom(n_pos, ca_pos, c_pos, 1.229,
+                           math.radians(120.5), torsion_o)
+        atoms_data.append((atom_idx, "O", "O", "O", "ALA", rid,
+                           o_pos[0], o_pos[1], o_pos[2], -0.5679, 15.999))
         atom_idx += 1
 
-        # Intra-residue bonds
-        ff.add_bond(BondParam(atom_i=n_idx, atom_j=h_idx, k=434.0, r0=1.010))
-        ff.add_bond(BondParam(atom_i=n_idx, atom_j=ca_idx, k=337.0, r0=1.449))
-        ff.add_bond(BondParam(atom_i=ca_idx, atom_j=ha_idx, k=340.0, r0=1.090))
-        ff.add_bond(BondParam(atom_i=ca_idx, atom_j=cb_idx, k=310.0, r0=1.526))
-        ff.add_bond(BondParam(atom_i=ca_idx, atom_j=c_idx, k=317.0, r0=1.522))
-        ff.add_bond(BondParam(atom_i=c_idx, atom_j=o_idx, k=570.0, r0=1.229))
+        # ── Intra-residue bonds ──
+        bond_defs.append((n_idx, h_idx, 434.0, 1.010))
+        bond_defs.append((n_idx, ca_idx, 337.0, 1.449))
+        bond_defs.append((ca_idx, ha_idx, 340.0, 1.090))
+        bond_defs.append((ca_idx, cb_idx, 310.0, 1.526))
+        bond_defs.append((ca_idx, c_idx_cur, 317.0, 1.522))
+        bond_defs.append((c_idx_cur, o_idx, 570.0, 1.229))
 
-        # Inter-residue peptide bond
-        if bond_start_prev_c >= 0:
-            ff.add_bond(BondParam(atom_i=bond_start_prev_c, atom_j=n_idx, k=490.0, r0=1.335))
-            # Angle: prev_C - N - CA
-            ff.add_angle(AngleParam(atom_i=bond_start_prev_c, atom_j=n_idx, atom_k=ca_idx, k=50.0, theta0=2.124))
+        # ── Inter-residue peptide bond ──
+        if prev_c_idx >= 0:
+            prev_o_idx = prev_c_idx + 1  # O always follows C
+            bond_defs.append((prev_c_idx, n_idx, 490.0, 1.335))
+            angle_defs.append((prev_c_idx, n_idx, ca_idx, 50.0, 2.124))
+            angle_defs.append((prev_c_idx, n_idx, h_idx, 35.0, 2.042))
+            angle_defs.append((prev_o_idx, prev_c_idx, n_idx, 80.0, 2.101))
 
-        # Intra-residue angles
-        ff.add_angle(AngleParam(atom_i=n_idx, atom_j=ca_idx, atom_k=cb_idx, k=80.0, theta0=1.934))
-        ff.add_angle(AngleParam(atom_i=n_idx, atom_j=ca_idx, atom_k=c_idx, k=63.0, theta0=1.911))
-        ff.add_angle(AngleParam(atom_i=cb_idx, atom_j=ca_idx, atom_k=c_idx, k=63.0, theta0=1.911))
-        ff.add_angle(AngleParam(atom_i=ca_idx, atom_j=c_idx, atom_k=o_idx, k=80.0, theta0=2.101))
-        ff.add_angle(AngleParam(atom_i=h_idx, atom_j=n_idx, atom_k=ca_idx, k=50.0, theta0=2.042))
+        # ── Intra-residue angles ──
+        angle_defs.append((h_idx, n_idx, ca_idx, 50.0, 2.042))
+        angle_defs.append((n_idx, ca_idx, c_idx_cur, 63.0, 1.911))
+        angle_defs.append((n_idx, ca_idx, cb_idx, 80.0, 1.934))
+        angle_defs.append((n_idx, ca_idx, ha_idx, 50.0, 1.911))
+        angle_defs.append((ha_idx, ca_idx, cb_idx, 35.0, 1.911))
+        angle_defs.append((ha_idx, ca_idx, c_idx_cur, 50.0, 1.911))
+        angle_defs.append((cb_idx, ca_idx, c_idx_cur, 63.0, 1.911))
+        angle_defs.append((ca_idx, c_idx_cur, o_idx, 80.0, 2.101))
+        angle_defs.append((ca_idx, cb_idx, hb_indices[0], 50.0, 1.911))
+        angle_defs.append((ca_idx, cb_idx, hb_indices[1], 50.0, 1.911))
+        angle_defs.append((ca_idx, cb_idx, hb_indices[2], 50.0, 1.911))
 
-        # Dihedral: φ = C(i-1)-N-CA-C
-        if bond_start_prev_c >= 0:
-            ff.add_dihedral(DihedralParam(atom_i=bond_start_prev_c, atom_j=n_idx,
-                                          atom_k=ca_idx, atom_l=c_idx, Vn=0.5, gamma=math.pi, n=2))
-        # ψ = N-CA-C-N(i+1)  — added in next iteration
+        # ── Dihedral: φ = C(i−1)-N-CA-C ──
+        if prev_c_idx >= 0:
+            dihedral_defs.append((prev_c_idx, n_idx, ca_idx, c_idx_cur,
+                                  0.5, math.pi, 2))
 
-        bond_start_prev_c = c_idx
+        prev_c_idx = c_idx_cur
+
+    # ── Add all atoms ──
+    for d in atoms_data:
+        ff.add_atom(Atom(index=d[0], name=d[1], element=d[2], atom_type=d[3],
+                         residue=d[4], residue_id=d[5],
+                         x=d[6], y=d[7], z=d[8], charge=d[9], mass=d[10]))
+
+    # ── Add all bonds, angles, dihedrals ──
+    for i, j, k, r0 in bond_defs:
+        ff.add_bond(BondParam(atom_i=i, atom_j=j, k=k, r0=r0))
+    for i, j, k_idx, k_val, t0 in angle_defs:
+        ff.add_angle(AngleParam(atom_i=i, atom_j=j, atom_k=k_idx,
+                                k=k_val, theta0=t0))
+    for i, j, k, l, vn, g, n in dihedral_defs:
+        ff.add_dihedral(DihedralParam(atom_i=i, atom_j=j, atom_k=k,
+                                       atom_l=l, Vn=vn, gamma=g, n=n))
 
     return ff
 

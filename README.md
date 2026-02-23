@@ -25,7 +25,7 @@ A from-scratch molecular mechanics force field engine that computes the total po
 |----------|-------|-------------|
 | Alanine dipeptide | 22 | Standard Ace-Ala-Nme benchmark |
 | Glycine tripeptide | 33 | Extended backbone system |
-| Alpha helix (5-res) | 50 | Poly-alanine helical structure |
+| Alpha helix (5-res) | 50 | Poly-alanine helix (NeRF coordinates) |
 | Beta hairpin | 16 | Backbone-only antiparallel strand |
 | Salt bridge | 14 | Lys-Asp electrostatic pair |
 | Disulfide bond | 12 | Cys-S-S-Cys covalent cross-link |
@@ -53,7 +53,7 @@ week_16_project_1/
 ├── week_16_project_1_outline.md       # Project specification
 ├── src/
 │   ├── __init__.py                    # Package re-exports
-│   ├── forcefield_engine.py           # Core engine (~1570 lines)
+│   ├── forcefield_engine.py           # Core engine (~1716 lines)
 │   ├── analysis.py                    # Analysis pipelines (~640 lines)
 │   └── visualization.py              # Plotly + Matplotlib renderers (~850 lines)
 ├── tests/

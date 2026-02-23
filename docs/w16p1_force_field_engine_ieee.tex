@@ -198,7 +198,7 @@ The implementation follows a layered architecture with strict dependency flow:
 \toprule
 Module & Responsibility & Lines \\
 \midrule
-\texttt{forcefield\_engine.py} & Data structures, energy calculators & $\sim$1570 \\
+\texttt{forcefield\_engine.py} & Data structures, energy calculators & $\sim$1716 \\
 \texttt{analysis.py} & Typed result containers, pipelines & $\sim$640 \\
 \texttt{visualization.py} & Plotly + Matplotlib renderers & $\sim$850 \\
 \texttt{app.py} & 8-page Streamlit dashboard & $\sim$940 \\
@@ -241,7 +241,7 @@ Molecule & Atoms & Bonds & Angles & Description \\
 \midrule
 Alanine dipeptide   & 22 & 21 & 20 & Standard benchmark \\
 Glycine tripeptide  & 33 & 32 & 31 & Extended backbone \\
-Alpha helix (5-res) & 50 & 49 & 48 & Poly-alanine helix \\
+Alpha helix (5-res) & 50 & 49 & 67 & Poly-alanine helix (NeRF) \\
 Beta hairpin        & 16 & 15 & 12 & Backbone strand \\
 Salt bridge         & 14 & 13 & 12 & Lys-Asp charge pair \\
 Disulfide bond      & 12 & 11 & 10 & Cys-S-S-Cys cross-link \\

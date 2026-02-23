@@ -122,7 +122,7 @@ Bonds with stress near 1.0 are maximally strained — these correspond to frustr
 
 | Module | Responsibility | Lines |
 |--------|---------------|-------|
-| `forcefield_engine.py` | Atom/bond data structures, energy calculators, preset builders | ~1570 |
+| `forcefield_engine.py` | Atom/bond data structures, energy calculators, preset builders | ~1716 |
 | `analysis.py` | Typed result containers, pipeline functions, CLI summaries | ~640 |
 | `visualization.py` | PlotlyRenderer (interactive) + MatplotlibRenderer (publication) | ~850 |
 | `app.py` | 8-page Streamlit dashboard | ~940 |
@@ -150,7 +150,7 @@ The `ForceField` class maintains:
 |----------|-------|-------|--------|-----------|-------------|
 | Alanine dipeptide | 22 | 21 | 20 | 8 | Standard benchmark |
 | Glycine tripeptide | 33 | 32 | 31 | 12 | Extended backbone |
-| Alpha helix (5-res) | 50 | 49 | 48 | 20 | Poly-alanine helix |
+| Alpha helix (5-res) | 50 | 49 | 67 | 4 | Poly-alanine helix (NeRF) |
 | Beta hairpin | 16 | 15 | 12 | 4 | Backbone-only strand |
 | Salt bridge | 14 | 13 | 12 | 4 | Lys-Asp charge pair |
 | Disulfide bond | 12 | 11 | 10 | 4 | Cys-S-S-Cys cross-link |
