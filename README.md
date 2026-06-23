@@ -1,5 +1,15 @@
 # The Force Field Engine — Calculating U(r)
 
+<!-- AI-PORTFOLIO-NOTICE:START -->
+> **Portfolio note — Spring 2026 AI Research Prototype Portfolio (S26 AIRP)**
+>
+> This repository is part of the **Spring 2026 AI Research Prototype Portfolio (S26 AIRP)**, a portfolio exploring **AI-assisted research software prototyping** and LLM-assisted scientific software development. The code, interface, documentation, and any accompanying reports were developed with substantial AI assistance as part of an exploratory learning workflow.
+>
+> The scientific/domain-specific content is provisional and has not been independently validated by domain experts. This repository should be read as a software-engineering, workflow-design, and AI-methodology artifact, not as validated scientific research.
+>
+> For full context, see [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md).
+<!-- AI-PORTFOLIO-NOTICE:END -->
+
 > **Week 16, Project 1** · Biophysics Portfolio · CS Research Self-Study
 
 A from-scratch molecular mechanics force field engine that computes the total potential energy $U(\mathbf{r}) = U_{\text{bonds}} + U_{\text{angles}} + U_{\text{dihedrals}} + U_{\text{VdW}} + U_{\text{elec}}$ for polypeptide systems using AMBER ff99 parameters. Features per-bond stress visualization, an interactive "Break a Bond" experiment, parameter scanning, and coordinate perturbation analysis.
